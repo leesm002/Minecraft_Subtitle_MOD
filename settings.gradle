@@ -1,0 +1,10 @@
+pluginManagement {
+    repositories {
+        maven {
+            rootProject.name = "King_Shack_Sub"
+            name = 'Fabric'
+            url = 'https://maven.fabricmc.net/'
+        }
+        gradlePluginPortal()
+    }
+}

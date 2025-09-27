@@ -1,0 +1,13 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "org.king_shack.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "SubtitleHudMixin"
+  ],
+  "mixins": [],
+  "injectors": { "defaultRequire": 1 },
+  "refmap": "kingshacksub.client.refmap.json",
+  "verbose": true
+}
