@@ -12,7 +12,6 @@ import net.minecraft.sound.SoundEvents;
 import net.minecraft.text.Text;
 import net.minecraft.text.TranslatableTextContent;
 import net.minecraft.util.Identifier;
-import net.minecraft.util.Util;
 import net.minecraft.util.math.Box;
 import org.king_shack.config.KSSubConfig;
 import org.king_shack.mixin.accessor.SubtitleEntryAccessor;
@@ -26,11 +25,16 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import java.lang.reflect.Method;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
+import java.util.WeakHashMap;
 
 @Mixin(SubtitlesHud.class)
 public class SubtitleHudMixin {
 
-    // 내 낚시찌 Splash만 통과 (시그니처 고정)
+    /** 엔트리 최초 등장 틱 기록 (월드 틱 기준, 1tick = 50ms) */
+    private static final Map<Object, Long> SEEN_TICK = new WeakHashMap<>();
+
+    // 내 낚시찌 Splash만 통과
     @Inject(
             method = "onSoundPlayed(Lnet/minecraft/client/sound/SoundInstance;Lnet/minecraft/client/sound/WeightedSoundSet;F)V",
             at = @At("HEAD"),
@@ -46,37 +50,45 @@ public class SubtitleHudMixin {
         }
     }
 
-    // 렌더 TAIL: 유지시간 초과 정리 + 외부 스플래시 제거(후처리 안전망)
+    // 렌더 TAIL: 유지시간 초과 정리 + 외부 스플래시 제거(후처리)
     @Inject(method = "render(Lnet/minecraft/client/gui/DrawContext;)V", at = @At("TAIL"))
     private void ks$tailCleanupAndForeignSplashCull(DrawContext context, CallbackInfo ci) {
-        final int durationMs = Math.max(100, KSSubConfig.INSTANCE.subtitleDurationMs);
-        final long now = Util.getMeasuringTimeMs();
+        final int durationMs = Math.max(50, KSSubConfig.INSTANCE.subtitleDurationMs); // 최소 1틱(50ms)
+        final MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc == null || mc.world == null) return;
+
+        final long nowTick = mc.world.getTime(); // 월드 틱
 
         // 기본 엔트리
         List<?> entries = ((SubtitlesHudAccessor) (Object) this).getEntries();
         if (entries != null) {
-            pruneList(entries, now, durationMs, true);
+            pruneList(entries, nowTick, durationMs, true);
         }
         // 실제 표시 목록
         List<?> audibles = ((SubtitlesHudAudibleAccessor) (Object) this).getAudibleEntries();
         if (audibles != null) {
-            pruneList(audibles, now, durationMs, false);
+            pruneList(audibles, nowTick, durationMs, false);
         }
     }
 
-    private void pruneList(List<?> list, long now, int durationMs, boolean coarseOnly) {
+    private void pruneList(List<?> list, long nowTick, int durationMs, boolean coarseOnly) {
         Iterator<?> it = list.iterator();
         while (it.hasNext()) {
             Object raw = it.next();
             SubtitleEntryAccessor acc = (SubtitleEntryAccessor) (Object) raw;
 
-            long start = reflectSoundTimeFirst(acc.getSounds());
-            if (start <= 0L || (now - start) > durationMs) {
+            // 최초 등장 틱 기록/조회
+            long firstTick = SEEN_TICK.computeIfAbsent(raw, k -> nowTick);
+            long ageTicks = Math.max(0, nowTick - firstTick);
+            long ageMs = ageTicks * 50L; // 1tick = 50ms
+
+            if (ageMs > durationMs) {
                 it.remove();
+                SEEN_TICK.remove(raw);
                 continue;
             }
 
-            // 외부 낚시 스플래시 제거 (coarseOnly가 true면 유지시간만 정리)
+            // 외부 낚시 스플래시 제거 (coarseOnly=true면 유지시간만 정리)
             if (!coarseOnly) {
                 Text t = acc.getText();
                 if (t.getContent() instanceof TranslatableTextContent tc) {
@@ -86,6 +98,7 @@ public class SubtitleHudMixin {
                         double lz = reflectSoundZLast(acc.getSounds());
                         if (!isMyBobberNearPos(lx, ly, lz)) {
                             it.remove();
+                            SEEN_TICK.remove(raw);
                         }
                     }
                 }

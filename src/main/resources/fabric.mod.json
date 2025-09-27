@@ -4,12 +4,9 @@
   "version": "1.0.0",
   "name": "King Shack Subtitles",
   "description": "Custom subtitle duration and fishing bobber subtitle filter.",
-  "authors": [ "샥 킹" ],
-  "contact": {
-    "sources": "https://github.com/leesm002/Minecraft_Subtitle_MOD.git"
-  },
+  "authors": ["king_shack"],
   "license": "MIT",
-  "icon": "assets/kingshacksub/icon.png",
+  "icon": "assets.kingshacksub/icon.png",
   "environment": "client",
   "entrypoints": {
     "client": [
@@ -23,5 +20,8 @@
     "fabricloader": ">=0.17.2",
     "minecraft": "1.21.4",
     "java": ">=21"
+  },
+  "suggests": {
+    "fabric-api": "*"
   }
 }
