@@ -1,101 +1,48 @@
 plugins {
-    id 'fabric-loom' version '1.11-SNAPSHOT'
+    id 'fabric-loom' version '1.11.8'
     id 'maven-publish'
 }
 
-version = project.mod_version
-group = project.maven_group
-
-base {
-    archivesName = project.archives_base_name
-}
-
-loom {
-
-    splitEnvironmentSourceSets()
-
-    mods {
-        "king_shack_sub" {
-            sourceSet sourceSets.main
-            sourceSet sourceSets.client
-        }
-    }
-
-    mixin {
-        add sourceSets.main, "kingshacksub.refmap.json"
-    }
-
-}
-
-
-
-fabricApi {
-    configureDataGeneration {
-        client = true
-    }
-}
+group = 'org.king_shack'
+version = '1.0.0'
+archivesBaseName = 'kingshacksub'
 
 repositories {
     mavenCentral()
-    maven { url = "https://maven.fabricmc.net/" }
+    maven { url = 'https://maven.fabricmc.net/' }
+    maven { url = 'https://repo.spongepowered.org/repository/maven-public/' }
 }
 
 dependencies {
-    // To change the versions see the gradle.properties file
-    minecraft "com.mojang:minecraft:${project.minecraft_version}"
-    mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
-    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    // Minecraft / Fabric (MC 1.21.4)
+    minecraft "com.mojang:minecraft:1.21.4"
 
-    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+    mappings "net.fabricmc:yarn:1.21.4+build.8"
 
+    // Loader / API (네 로그 기준 안정 조합)
+    modImplementation "net.fabricmc:fabric-loader:0.17.2"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:0.119.4+1.21.4"
+
+    // Mixin Annotation Processor (필수)
+    annotationProcessor "org.spongepowered:mixin:0.8.7:processor"
+    compileOnly "org.spongepowered:mixin:0.8.7"
 }
 
-processResources {
-    inputs.property "version", project.version
-    inputs.property "minecraft_version", project.minecraft_version
-    inputs.property "loader_version", project.loader_version
-    filteringCharset "UTF-8"
-
-    filesMatching("fabric.mod.json") {
-        expand "version": project.version,
-                "minecraft_version": project.minecraft_version,
-                "loader_version": project.loader_version
-    }
-}
-
-def targetJavaVersion = 21
-tasks.withType(JavaCompile).configureEach {
-    // ensure that the encoding is set to UTF-8, no matter what the system default is
-    it.options.encoding = "UTF-8"
-    if (targetJavaVersion >= 10 || JavaVersion.current().isJava10Compatible()) {
-        it.options.release.set(targetJavaVersion)
-    }
+loom {
+    // refmap 파일명 (믹신 json과 맞춤)
+    mixin.defaultRefmapName = "kingshacksub.client.refmap.json"
 }
 
 java {
-    def javaVersion = JavaVersion.toVersion(targetJavaVersion)
-    if (JavaVersion.current() < javaVersion) {
-        toolchain.languageVersion = JavaLanguageVersion.of(targetJavaVersion)
-    }
+    toolchain { languageVersion = JavaLanguageVersion.of(21) }
     withSourcesJar()
 }
 
-jar {
-    from("LICENSE") {
-        rename { "${it}_${project.archivesBaseName}" }
-    }
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 21
 }
 
-// configure the maven publication
-publishing {
-    publications {
-        create("mavenJava", MavenPublication) {
-            artifactId = project.archives_base_name
-            from components.java
-        }
-    }
-
-    repositories {
-        // Add repositories to publish to here if needed.
-    }
+jar {
+    from("LICENSE") { rename { "${it}_${archivesBaseName}" } }
 }
