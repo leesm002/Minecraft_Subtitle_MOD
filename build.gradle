@@ -21,9 +21,12 @@ loom {
         }
     }
 
-    mixin.defaultRefmapName = "kingshacksub.client.refmap.json"
+    mixin {
+        add sourceSets.main, "kingshacksub.refmap.json"
+    }
 
 }
+
 
 
 fabricApi {

@@ -23,25 +23,17 @@ import java.lang.reflect.Field;
 import java.util.Iterator;
 import java.util.List;
 
-/**
- * 1) 낚시찌 첨벙 소리는 '내 보버'일 때만 자막 생성
- * 2) 자막 지속시간(기본 500ms, JSON 설정 적용)에 맞춰 tick()에서 오래된 항목 제거
- */
 @Mixin(SubtitlesHud.class)
 public class SubtitleHudMixin {
 
-    // SubtitlesHud의 자막 엔트리 리스트 (내부 타입이라 와일드카드)
     @Shadow @Final private List<?> entries;
 
-    // 1) 1.21.4 실제 시그니처: SoundInstance 단독
-    @Inject(
-            method = "onSoundPlayed(Lnet/minecraft/client/sound/SoundInstance;Lnet/minecraft/client/sound/WeightedSoundSet;F)V",
-            at = @At("HEAD"),
-            cancellable = true
-    )
+    @Inject(method = "onSoundPlayed", at = @At("HEAD"), cancellable = true)
+
     private void ks$onlyMyBobberSubtitles(SoundInstance sound, WeightedSoundSet soundSet, float range, CallbackInfo ci) {
         Identifier current = sound.getId();
         Identifier splash = Registries.SOUND_EVENT.getId(SoundEvents.ENTITY_FISHING_BOBBER_SPLASH);
+
         if (splash != null && splash.equals(current)) {
             if (!isMyBobberSound(sound)) {
                 ci.cancel();
@@ -49,14 +41,11 @@ public class SubtitleHudMixin {
         }
     }
 
-
-    // 2) tick 끝에서 커스텀 지속시간 적용
     @Inject(method = "tick()V", at = @At("TAIL"))
     private void ks$applyCustomDuration(CallbackInfo ci) {
-        final int durationMs = Math.max(100, KSSubConfig.INSTANCE.subtitleDurationMs); // 최소 100ms
+        final int durationMs = Math.max(100, KSSubConfig.INSTANCE.subtitleDurationMs);
         final long now = Util.getMeasuringTimeMs();
 
-        // 내부 클래스(SubtitleEntry)의 startTime을 리플렉션으로 읽어 필터링
         Iterator<?> it = entries.iterator();
         while (it.hasNext()) {
             Object entry = it.next();
@@ -67,13 +56,10 @@ public class SubtitleHudMixin {
                 if ((now - start) > durationMs) {
                     it.remove();
                 }
-            } catch (NoSuchFieldException | IllegalAccessException ignored) {
-                // 구조 변경 시에도 크래시 방지
-            }
+            } catch (NoSuchFieldException | IllegalAccessException ignored) {}
         }
     }
 
-    // 소리 좌표 주변의 낚시찌가 '내 것'인지 판정
     private static boolean isMyBobberSound(SoundInstance sound) {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc == null || mc.player == null || mc.world == null) return false;
@@ -82,7 +68,6 @@ public class SubtitleHudMixin {
         double sy = sound.getY();
         double sz = sound.getZ();
 
-        // 1.5블록 큐브 범위
         Box box = new Box(sx - 1.5, sy - 1.5, sz - 1.5, sx + 1.5, sy + 1.5, sz + 1.5);
 
         for (FishingBobberEntity bobber : mc.world.getEntitiesByClass(FishingBobberEntity.class, box, e -> true)) {
