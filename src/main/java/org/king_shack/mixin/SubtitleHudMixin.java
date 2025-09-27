@@ -9,32 +9,35 @@ import net.minecraft.entity.Entity;
 import net.minecraft.entity.projectile.FishingBobberEntity;
 import net.minecraft.registry.Registries;
 import net.minecraft.sound.SoundEvents;
-import net.minecraft.text.Text;
-import net.minecraft.text.TranslatableTextContent;
 import net.minecraft.util.Identifier;
+import net.minecraft.util.Util;
 import net.minecraft.util.math.Box;
 import org.king_shack.config.KSSubConfig;
-import org.king_shack.mixin.accessor.SubtitleEntryAccessor;
-import org.king_shack.mixin.accessor.SubtitlesHudAccessor;
-import org.king_shack.mixin.accessor.SubtitlesHudAudibleAccessor;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-import java.lang.reflect.Method;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.WeakHashMap;
-
+/**
+ * - "다른 사람이 낚시할 때" 첨벙 자막은 차단
+ * - 모든 자막 표시시간을 사실상 1초로 축소
+ *
+ * 표시시간 축소는 render() 내부의 시간 비교에서 쓰이는 현재시각을
+ * (원래시각 + 2000ms) 로 바꿔, 3초 조건을 1초처럼 느껴지게 만드는 방식.
+ * (버전마다 3000 상수가 인라이닝/삭제되어 ModifyConstant가 실패하는 걸 회피)
+ */
 @Mixin(SubtitlesHud.class)
 public class SubtitleHudMixin {
 
-    /** 엔트리 최초 등장 틱 기록 (월드 틱 기준, 1tick = 50ms) */
-    private static final Map<Object, Long> SEEN_TICK = new WeakHashMap<>();
+    /** 실효 자막 표시시간(ms). 1000 = 1초 */
+    private static final long TARGET_DURATION_MS = 1000L;
+    /** 바닐라 기본 3000ms 를 1000ms 처럼 보이게 하려면 +2000ms 오프셋을 준다. */
+    private static final long RENDER_TIME_OFFSET_MS = Math.max(0L, 3000L - TARGET_DURATION_MS);
 
-    // 내 낚시찌 Splash만 통과
+    /* -------------------------------------------------
+     * 타인 낚시 스플래시(보브 첨벙) 자막 차단
+     * ------------------------------------------------- */
     @Inject(
             method = "onSoundPlayed(Lnet/minecraft/client/sound/SoundInstance;Lnet/minecraft/client/sound/WeightedSoundSet;F)V",
             at = @At("HEAD"),
@@ -44,118 +47,57 @@ public class SubtitleHudMixin {
         Identifier currentId = sound.getId();
         Identifier splashId = Registries.SOUND_EVENT.getId(SoundEvents.ENTITY_FISHING_BOBBER_SPLASH);
         if (splashId != null && splashId.equals(currentId)) {
-            if (!isMyBobberSound(sound)) {
+            if (!isMyBobberSplash(sound.getX(), sound.getY(), sound.getZ())) {
+                // 내 낚시가 아니면 자막 등록 자체를 막음
                 ci.cancel();
             }
         }
     }
 
-    // 렌더 TAIL: 유지시간 초과 정리 + 외부 스플래시 제거(후처리)
-    @Inject(method = "render(Lnet/minecraft/client/gui/DrawContext;)V", at = @At("TAIL"))
-    private void ks$tailCleanupAndForeignSplashCull(DrawContext context, CallbackInfo ci) {
-        final int durationMs = Math.max(50, KSSubConfig.INSTANCE.subtitleDurationMs); // 최소 1틱(50ms)
-        final MinecraftClient mc = MinecraftClient.getInstance();
-        if (mc == null || mc.world == null) return;
-
-        final long nowTick = mc.world.getTime(); // 월드 틱
-
-        // 기본 엔트리
-        List<?> entries = ((SubtitlesHudAccessor) (Object) this).getEntries();
-        if (entries != null) {
-            pruneList(entries, nowTick, durationMs, true);
-        }
-        // 실제 표시 목록
-        List<?> audibles = ((SubtitlesHudAudibleAccessor) (Object) this).getAudibleEntries();
-        if (audibles != null) {
-            pruneList(audibles, nowTick, durationMs, false);
-        }
+    /* -------------------------------------------------
+     * 자막 표시시간 1초 적용:
+     * render(...) 내의 시간 기준(Util.getMeasuringTimeMs())을
+     * +RENDER_TIME_OFFSET_MS 해서, 3초 조건을 1초 체감으로 바꿈.
+     * ------------------------------------------------- */
+    @Redirect(
+            method = "render(Lnet/minecraft/client/gui/DrawContext;)V",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/util/Util;getMeasuringTimeMs()J")
+    )
+    private long ks$renderTimeOffset() {
+        // 현재 시간에 오프셋을 더해 "더 빨리 3초가 지난 것처럼" 만들기
+        return Util.getMeasuringTimeMs() + RENDER_TIME_OFFSET_MS;
     }
 
-    private void pruneList(List<?> list, long nowTick, int durationMs, boolean coarseOnly) {
-        Iterator<?> it = list.iterator();
-        while (it.hasNext()) {
-            Object raw = it.next();
-            SubtitleEntryAccessor acc = (SubtitleEntryAccessor) (Object) raw;
-
-            // 최초 등장 틱 기록/조회
-            long firstTick = SEEN_TICK.computeIfAbsent(raw, k -> nowTick);
-            long ageTicks = Math.max(0, nowTick - firstTick);
-            long ageMs = ageTicks * 50L; // 1tick = 50ms
-
-            if (ageMs > durationMs) {
-                it.remove();
-                SEEN_TICK.remove(raw);
-                continue;
-            }
-
-            // 외부 낚시 스플래시 제거 (coarseOnly=true면 유지시간만 정리)
-            if (!coarseOnly) {
-                Text t = acc.getText();
-                if (t.getContent() instanceof TranslatableTextContent tc) {
-                    if ("subtitles.entity.fishing_bobber.splash".equals(tc.getKey())) {
-                        double lx = reflectSoundXLast(acc.getSounds());
-                        double ly = reflectSoundYLast(acc.getSounds());
-                        double lz = reflectSoundZLast(acc.getSounds());
-                        if (!isMyBobberNearPos(lx, ly, lz)) {
-                            it.remove();
-                            SEEN_TICK.remove(raw);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // ======= Reflection helpers for SoundEntry(record x,y,z,time) =======
-    private static long reflectSoundTimeFirst(List<?> sounds) {
-        if (sounds == null || sounds.isEmpty()) return 0L;
-        Object first = sounds.getFirst();
-        return (long) invokeNoArg(first, "time", long.class, 0L);
-    }
-    private static double reflectSoundXLast(List<?> sounds) {
-        if (sounds == null || sounds.isEmpty()) return 0.0;
-        Object last = sounds.getLast();
-        return (double) invokeNoArg(last, "x", double.class, 0.0);
-    }
-    private static double reflectSoundYLast(List<?> sounds) {
-        if (sounds == null || sounds.isEmpty()) return 0.0;
-        Object last = sounds.getLast();
-        return (double) invokeNoArg(last, "y", double.class, 0.0);
-    }
-    private static double reflectSoundZLast(List<?> sounds) {
-        if (sounds == null || sounds.isEmpty()) return 0.0;
-        Object last = sounds.getLast();
-        return (double) invokeNoArg(last, "z", double.class, 0.0);
-    }
-    private static Object invokeNoArg(Object target, String methodName, Class<?> ret, Object def) {
-        try {
-            Method m = target.getClass().getMethod(methodName);
-            m.setAccessible(true);
-            return m.invoke(target);
-        } catch (Throwable t) {
-            return def;
-        }
-    }
-    // =========================================================
-
-    private static boolean isMyBobberSound(SoundInstance sound) {
-        return isMyBobberNearPos(sound.getX(), sound.getY(), sound.getZ());
-    }
-
-    private static boolean isMyBobberNearPos(double sx, double sy, double sz) {
+    /* ---------------------------
+     * Helper
+     * --------------------------- */
+    private static boolean isMyBobberSplash(double sx, double sy, double sz) {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc == null || mc.player == null || mc.world == null) return false;
 
-        double r = KSSubConfig.INSTANCE.bobberMatchRadius;
-        Box box = new Box(sx - r, sy - r, sz - r, sx + r, sy + r, sz + r);
+        final double r = Math.max(0.5, KSSubConfig.INSTANCE.bobberMatchRadius);
+        final double v = Math.max(0.25, KSSubConfig.INSTANCE.bobberVerticalTolerance);
+        final double bias = Math.max(0.0, KSSubConfig.INSTANCE.foreignBiasBlocks);
 
-        for (FishingBobberEntity bobber :
-                mc.world.getEntitiesByClass(FishingBobberEntity.class, box, e -> true)) {
+        Box box = new Box(sx - r, sy - v, sz - r, sx + r, sy + v, sz + r);
+
+        double bestOwned = Double.POSITIVE_INFINITY;
+        double bestForeign = Double.POSITIVE_INFINITY;
+
+        for (FishingBobberEntity bobber : mc.world.getEntitiesByClass(FishingBobberEntity.class, box, e -> true)) {
             Entity owner = bobber.getOwner();
+            double dx = bobber.getX() - sx;
+            double dz = bobber.getZ() - sz;
+            double distHoriz = Math.hypot(dx, dz);
+
             if (owner != null && owner.getId() == mc.player.getId()) {
-                return true;
+                if (distHoriz < bestOwned) bestOwned = distHoriz;
+            } else {
+                if (distHoriz < bestForeign) bestForeign = distHoriz;
             }
         }
-        return false;
+
+        if (bestOwned == Double.POSITIVE_INFINITY) return false; // 내 낚시찌 없음
+        return (bestForeign == Double.POSITIVE_INFINITY) || (bestOwned <= bestForeign - bias);
     }
 }
