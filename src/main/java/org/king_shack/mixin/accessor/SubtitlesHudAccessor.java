@@ -6,8 +6,9 @@ import org.spongepowered.asm.mixin.gen.Accessor;
 
 import java.util.List;
 
+/** SubtitlesHud.entries 에 접근하기 위한 액세서 */
 @Mixin(SubtitlesHud.class)
 public interface SubtitlesHudAccessor {
     @Accessor("entries")
-    List<?> getEntries(); // inner 타입이 비공개라 와일드카드로 받음
+    List<?> getEntries();
 }

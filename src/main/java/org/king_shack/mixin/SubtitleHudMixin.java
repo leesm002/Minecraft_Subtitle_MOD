@@ -10,34 +10,27 @@ import net.minecraft.entity.projectile.FishingBobberEntity;
 import net.minecraft.registry.Registries;
 import net.minecraft.sound.SoundEvents;
 import net.minecraft.util.Identifier;
-import net.minecraft.util.Util;
 import net.minecraft.util.math.Box;
 import org.king_shack.config.KSSubConfig;
+import org.king_shack.mixin.accessor.SubtitlesHudAccessor;
+import org.king_shack.duck.KSEntryExt;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/**
- * - "다른 사람이 낚시할 때" 첨벙 자막은 차단
- * - 모든 자막 표시시간을 사실상 1초로 축소
- *
- * 표시시간 축소는 render() 내부의 시간 비교에서 쓰이는 현재시각을
- * (원래시각 + 2000ms) 로 바꿔, 3초 조건을 1초처럼 느껴지게 만드는 방식.
- * (버전마다 3000 상수가 인라이닝/삭제되어 ModifyConstant가 실패하는 걸 회피)
- */
+import java.util.Iterator;
+import java.util.List;
+
 @Mixin(SubtitlesHud.class)
 public class SubtitleHudMixin {
 
-    /** 실효 자막 표시시간(ms). 1000 = 1초 */
-    private static final long TARGET_DURATION_MS = 1000L;
-    /** 바닐라 기본 3000ms 를 1000ms 처럼 보이게 하려면 +2000ms 오프셋을 준다. */
-    private static final long RENDER_TIME_OFFSET_MS = Math.max(0L, 3000L - TARGET_DURATION_MS);
+    /** 전 자막 지속시간(밀리초) – 1000ms = 1초로 강제 */
+    private static final long GLOBAL_SUBTITLE_MS = 1000L;
 
-    /* -------------------------------------------------
-     * 타인 낚시 스플래시(보브 첨벙) 자막 차단
-     * ------------------------------------------------- */
+    /* ---------------------------
+     * 타인 낚시 스플래시 차단
+     * --------------------------- */
     @Inject(
             method = "onSoundPlayed(Lnet/minecraft/client/sound/SoundInstance;Lnet/minecraft/client/sound/WeightedSoundSet;F)V",
             at = @At("HEAD"),
@@ -48,24 +41,38 @@ public class SubtitleHudMixin {
         Identifier splashId = Registries.SOUND_EVENT.getId(SoundEvents.ENTITY_FISHING_BOBBER_SPLASH);
         if (splashId != null && splashId.equals(currentId)) {
             if (!isMyBobberSplash(sound.getX(), sound.getY(), sound.getZ())) {
-                // 내 낚시가 아니면 자막 등록 자체를 막음
-                ci.cancel();
+                ci.cancel(); // 내 낚시가 아니면 등록 자체를 막음
             }
         }
     }
 
-    /* -------------------------------------------------
-     * 자막 표시시간 1초 적용:
-     * render(...) 내의 시간 기준(Util.getMeasuringTimeMs())을
-     * +RENDER_TIME_OFFSET_MS 해서, 3초 조건을 1초 체감으로 바꿈.
-     * ------------------------------------------------- */
-    @Redirect(
-            method = "render(Lnet/minecraft/client/gui/DrawContext;)V",
-            at = @At(value = "INVOKE", target = "Lnet/minecraft/util/Util;getMeasuringTimeMs()J")
-    )
-    private long ks$renderTimeOffset() {
-        // 현재 시간에 오프셋을 더해 "더 빨리 3초가 지난 것처럼" 만들기
-        return Util.getMeasuringTimeMs() + RENDER_TIME_OFFSET_MS;
+    /* ---------------------------------------------------
+     * render(...) 끝에서 1초 지난 엔트리를 즉시 제거 (페이드 제거)
+     * --------------------------------------------------- */
+    @Inject(method = "render(Lnet/minecraft/client/gui/DrawContext;)V",
+            at = @At("TAIL"))
+    private void ks$trimExpiredAtTail(DrawContext ctx, CallbackInfo ci) {
+        long now = System.currentTimeMillis();
+        // SubtitlesHud.entries 접근
+        List<?> entries = ((SubtitlesHudAccessor) (Object) this).getEntries();
+
+        // 1) 생성시간 없는 엔트리(구버전/외부 모드가 만든 것) → 지금 시각으로 초기화
+        for (Object e : entries) {
+            if (e instanceof KSEntryExt ext && ext.ks$getStartAt() == 0L) {
+                ext.ks$setStartAt(now);
+            }
+        }
+
+        // 2) 1초 지난 것들 즉시 제거
+        Iterator<?> it = entries.iterator();
+        while (it.hasNext()) {
+            Object e = it.next();
+            if (e instanceof KSEntryExt ext) {
+                if (now - ext.ks$getStartAt() >= GLOBAL_SUBTITLE_MS) {
+                    it.remove();
+                }
+            }
+        }
     }
 
     /* ---------------------------
@@ -84,7 +91,8 @@ public class SubtitleHudMixin {
         double bestOwned = Double.POSITIVE_INFINITY;
         double bestForeign = Double.POSITIVE_INFINITY;
 
-        for (FishingBobberEntity bobber : mc.world.getEntitiesByClass(FishingBobberEntity.class, box, e -> true)) {
+        for (FishingBobberEntity bobber :
+                mc.world.getEntitiesByClass(FishingBobberEntity.class, box, e -> true)) {
             Entity owner = bobber.getOwner();
             double dx = bobber.getX() - sx;
             double dz = bobber.getZ() - sz;
